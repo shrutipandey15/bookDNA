@@ -16,6 +16,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.push_service import push_to_user
+from app.services.realtime_service import publish as realtime_publish
 from app.models.notification import (
     Notification,
     NotificationPrefs,
@@ -127,6 +128,11 @@ async def notify(
             # No push: this event coalesced into a notification the reader has
             # not read yet, so they have already been knocked on for it. Pushing
             # again is how a five-message burst becomes five buzzes.
+            #
+            # Realtime IS still sent: it is a data-sync nudge, not a buzz — an
+            # open thread should refresh on message #2, not just message #1.
+            if deliver_after <= now:
+                await realtime_publish(user_id, {"type": "notify", "kind": kind})
             return existing
 
     n = Notification(
@@ -147,6 +153,9 @@ async def notify(
             await push_to_user(db, user_id, kind, payload)
         except Exception:  # noqa: BLE001 — a courtesy layer cannot break the caller
             logger.exception("push failed for notification %s", n.id)
+        # Instant in-app delivery for any tab this user has open. Best-effort and
+        # already swallows its own errors.
+        await realtime_publish(user_id, {"type": "notify", "kind": kind})
 
     return n
 

@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.middleware.error_handlers import register_error_handlers, setup_logging
-from app.routers import auth, entries, dna, public, user, books, admin, mirror, meta, echo, social, notifications, profile, prompts, journal, resonance, threads, push
+from app.routers import auth, entries, dna, public, user, books, admin, mirror, meta, echo, social, notifications, profile, prompts, journal, resonance, threads, push, realtime
 
 settings = get_settings()
 setup_logging(settings.ENVIRONMENT)
@@ -80,6 +80,7 @@ app.include_router(journal.router, prefix=settings.API_V1_PREFIX)
 app.include_router(resonance.router, prefix=settings.API_V1_PREFIX)
 app.include_router(threads.router, prefix=settings.API_V1_PREFIX)
 app.include_router(push.router, prefix=settings.API_V1_PREFIX)
+app.include_router(realtime.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/health")
