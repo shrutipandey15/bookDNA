@@ -18,17 +18,29 @@ from app.services import dna_signals as sig
 from app.services.dna_signals import GATES, MIN_BOOKS_FOR_DNA
 from app.utils.emotions import EMOTIONS_BY_SLUG
 
-# Human-readable "what unlocks this" strings for the locked list (B7.6).
-UNLOCK_REASONS: dict[str, str] = {
-    "intensity_signature": "needs 8 books to read your rating style",
-    "range": "needs 8 books to measure how wide you reach",
-    "blind_spot": "needs 10 books before a gap means anything",
-    "contradiction": "needs 10 books — and telling me what you read for",
-    "abandonment": "needs 10 books, a few of them put down unfinished",
-    "dnf_reason": "needs 3 books you put down and said why",
-    "pairing": "needs 15 books to see which feelings travel together",
-    "drift": "needs 15 books and two snapshots to see movement",
-    "seasonality": "needs 25 books across a full year",
+# What each locked insight is actually counting, in plain words (B7.6).
+#
+# NONE of these gates count titles on the shelf — they count the books that could
+# supply THAT insight's evidence (see GATE_POPULATION). So the copy must never say
+# a bare "5 books": a reader with 6 books shelved and 1 tagged would read "Arc
+# needs 5 books", check their shelf, and think the app is broken. Each string
+# below names the specific population, and the locked row is rendered with the
+# reader's current count against it ("you have 2"), so "why is this still locked?"
+# answers itself.
+#
+# `unit` follows "waits on {need} " and is the requirement in the reader's terms.
+# `note` is an optional tail for a second condition that isn't just a count.
+UNLOCK_UNITS: dict[str, tuple[str, str]] = {
+    "intensity_signature": ("books with a feeling tagged", "enough to read your rating style"),
+    "range": ("books with a feeling tagged", "enough to measure how wide you reach"),
+    "blind_spot": ("books with a feeling tagged", "before an untouched feeling means anything"),
+    "contradiction": ("books with a feeling tagged", "plus telling it what you read for"),
+    "abandonment": ("books with a feeling tagged", "a few of them left unfinished"),
+    "pairing": ("books with a feeling tagged", "to see which feelings travel together"),
+    "drift": ("books with a feeling tagged", "across two snapshots, to see movement"),
+    "dnf_reason": ("books you've set down and named a reason for", ""),
+    "arc": ("books finished through the three-beat flow", "not just marked done"),
+    "seasonality": ("books across a full year of reading", ""),
 }
 
 
@@ -471,17 +483,35 @@ def generate_insights(ctx: dict, *, limit: int = 4) -> tuple[list[dict], list[di
         if gate is None:
             continue
         if _population(ctx, cat) < gate and cat not in shown:
-            locked.append({
-                "category": cat,
-                "unlocks_at": f"{gate} books" if cat != "seasonality" else "25 books + 12 months",
-                "reason": UNLOCK_REASONS.get(cat, f"needs {gate} books"),
-            })
-    # Seasonality is always locked this pass, even past 25 books (needs the 12 months).
+            locked.append(_locked_row(cat, gate, _population(ctx, cat)))
+    # Seasonality is always locked this pass, even past 25 books (it needs the 12
+    # months of history no book count can stand in for).
     if "seasonality" not in {l["category"] for l in locked}:
-        locked.append({"category": "seasonality", "unlocks_at": "25 books + 12 months",
-                       "reason": UNLOCK_REASONS["seasonality"]})
+        locked.append(_locked_row("seasonality", GATES["seasonality"], _population(ctx, "seasonality")))
 
     return unlocked, locked
+
+
+def _locked_row(cat: str, need: int, have: int) -> dict:
+    """One 'Not yet' row, specific enough that 'why is this still locked?' answers itself.
+
+    `have`/`need` count the SAME population (GATE_POPULATION), never shelf size, so
+    the client can render 'you have 2' against 'waits on 10 books with a feeling
+    tagged' without the two numbers being about different things.
+    """
+    unit, note = UNLOCK_UNITS.get(cat, ("books with a feeling tagged", ""))
+    reason = f"{need} {unit}"
+    if note:
+        reason += f" — {note}"
+    # `have` is the reader's count against the SAME population as `need`. Time-gated
+    # seasonality is the exception: it isn't a shortfall you close by logging books,
+    # so it carries no count and the client shows no "you have N".
+    if cat == "seasonality":
+        return {"category": cat, "unlocks_at": "25 books + 12 months",
+                "reason": f"{need} {unit}, once you've read here that long",
+                "have": None, "need": need}
+    return {"category": cat, "unlocks_at": reason, "reason": reason,
+            "have": have, "need": need}
 
 
 def _top_slug(vec: dict[str, float]) -> str | None:

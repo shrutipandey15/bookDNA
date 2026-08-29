@@ -88,11 +88,19 @@ async def get_dna_profile(
     `dna_dirty` is false; recomputed once per change, not per request (Part 4).
     """
     cached = current_user.cached_dna_v2
-    # A payload cached before `snapshot_count` existed is stale in a way
-    # `dna_dirty` can't know about: nothing changed about the reader, only about
-    # the shape we serve. Recompute once rather than serving a response missing a
-    # field the client now depends on.
-    if not current_user.dna_dirty and cached and "snapshot_count" in cached:
+    # A payload cached before a shape change is stale in a way `dna_dirty` can't
+    # know about: nothing changed about the reader, only about what we serve.
+    # Recompute once rather than serve a response the client can't render right.
+    #   - `snapshot_count`: added as a top-level field the client depends on.
+    #   - locked rows without `need`: cached before the "Not yet" copy started
+    #     naming each gate's real population and the reader's count against it, so
+    #     an old cache still says a bare "waits on 5 books".
+    def _fresh(c: dict) -> bool:
+        if "snapshot_count" not in c:
+            return False
+        return all("need" in row for row in (c.get("locked") or []))
+
+    if not current_user.dna_dirty and cached and _fresh(cached):
         payload = cached
     else:
         payload = await compute_and_cache(db, current_user)
