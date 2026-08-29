@@ -39,12 +39,25 @@ from app.utils.cache import dna_cache, invalidate_dna
 router = APIRouter(prefix="/dna", tags=["dna"])
 
 
+# A `want_to_read` book was never opened: it carries no reading, no emotions, no
+# arc. It must not count anywhere in the DNA aggregate — not as a heatmap column,
+# not in `total_books`, not in stats. Every other status means the book was at
+# least started, so it stays.
+_DNA_EXCLUDED_STATUSES = ("want_to_read",)
+
+
 async def _get_user_entries(db: AsyncSession, user_id) -> list[dict]:
-    """Fetch all entries for a user and convert to dicts for the engine."""
+    """Fetch a user's engaged entries and convert to dicts for the engine.
+
+    TBR / `want_to_read` entries are excluded — they have no emotional data yet.
+    """
     result = await db.execute(
         select(BookEntry)
         .options(selectinload(BookEntry.emotions))
-        .where(BookEntry.user_id == user_id)
+        .where(
+            BookEntry.user_id == user_id,
+            BookEntry.status.notin_(_DNA_EXCLUDED_STATUSES),
+        )
         .order_by(BookEntry.created_at.asc())
     )
     entries = result.scalars().all()
