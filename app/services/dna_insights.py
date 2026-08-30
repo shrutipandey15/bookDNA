@@ -43,6 +43,34 @@ UNLOCK_UNITS: dict[str, tuple[str, str]] = {
     "seasonality": ("books across a full year of reading", ""),
 }
 
+# The Register (the profile's progress ledger) lists every gate as one row —
+# earned or not-yet — so each needs a short reader-facing name and a one-line
+# "what it shows you once it's earned". `opens` completes "shows you …".
+GATE_LABELS: dict[str, str] = {
+    "intensity_signature": "Intensity signature",
+    "range": "Range",
+    "blind_spot": "Blind spot",
+    "contradiction": "Contradiction",
+    "abandonment": "Abandonment",
+    "pairing": "Pairing",
+    "drift": "Drift",
+    "dnf_reason": "DNF reason",
+    "arc": "Arc",
+    "seasonality": "Seasonality",
+}
+GATE_OPENS: dict[str, str] = {
+    "intensity_signature": "how you use the 1–10 scale — all-or-nothing, or careful",
+    "range": "how wide across the vocabulary your reading reaches",
+    "blind_spot": "the feelings you never once reach for",
+    "contradiction": "where what you read for and what you rate highest disagree",
+    "abandonment": "what a book tends to be doing when you put it down",
+    "pairing": "which feelings travel together on your shelf",
+    "drift": "how the shape of your reading has moved over time",
+    "dnf_reason": "the reason your unfinished books have in common",
+    "arc": "where your books start and where they leave you",
+    "seasonality": "how your reading changes with the calendar",
+}
+
 
 def _name(slug: str | None) -> str:
     if not slug:
@@ -429,14 +457,18 @@ def _population(ctx: dict, category: str) -> int:
     return ctx.get(GATE_POPULATION.get(category, "tagged_count"), 0)
 
 
-def generate_insights(ctx: dict, *, limit: int = 4) -> tuple[list[dict], list[dict]]:
-    """From a computed signal context, return (unlocked_insights, locked).
+def generate_insights(ctx: dict, *, limit: int = 4) -> tuple[list[dict], list[dict], list[dict]]:
+    """From a computed signal context, return (unlocked_insights, locked, earned).
 
     - An insight is emitted only if its population ≥ its gate AND its data is present.
     - At most one variant per category (rotates by that population so visits vary).
     - Ranked by surprise; the strongest `limit` are returned — never a dump.
     - Locked: every category whose gate the reader hasn't reached, with an honest
       reason (B7.6). This is the curiosity gap, at zero integrity cost.
+    - Earned: every gated category the reader HAS reached — the positive
+      counterpart the Register needs, independent of whether a template rendered
+      this visit. Seasonality is never here: it needs 12 months no count stands in
+      for, so it stays a locked row until that lands.
 
     GATES COUNT BOOKS THAT CARRY A FEELING, not titles on the shelf. Every gate
     here exists to keep a claim from being made on too little evidence, and an
@@ -489,7 +521,16 @@ def generate_insights(ctx: dict, *, limit: int = 4) -> tuple[list[dict], list[di
     if "seasonality" not in {l["category"] for l in locked}:
         locked.append(_locked_row("seasonality", GATES["seasonality"], _population(ctx, "seasonality")))
 
-    return unlocked, locked
+    earned: list[dict] = []
+    for cat in CATEGORY_ORDER:
+        gate = GATES.get(cat)
+        if gate is None or cat == "seasonality":
+            continue
+        have = _population(ctx, cat)
+        if have >= gate:
+            earned.append(_earned_row(cat, gate, have))
+
+    return unlocked, locked, earned
 
 
 def _locked_row(cat: str, need: int, have: int) -> dict:
@@ -506,12 +547,34 @@ def _locked_row(cat: str, need: int, have: int) -> dict:
     # `have` is the reader's count against the SAME population as `need`. Time-gated
     # seasonality is the exception: it isn't a shortfall you close by logging books,
     # so it carries no count and the client shows no "you have N".
+    label = GATE_LABELS.get(cat, cat.replace("_", " ").title())
+    opens = GATE_OPENS.get(cat, "")
     if cat == "seasonality":
-        return {"category": cat, "unlocks_at": "25 books + 12 months",
+        return {"category": cat, "label": label, "opens": opens,
+                "unlocks_at": "25 books + 12 months",
                 "reason": f"{need} {unit}, once you've read here that long",
                 "have": None, "need": need}
-    return {"category": cat, "unlocks_at": reason, "reason": reason,
+    return {"category": cat, "label": label, "opens": opens,
+            "unlocks_at": reason, "reason": reason,
             "have": have, "need": need}
+
+
+def _earned_row(cat: str, need: int, have: int) -> dict:
+    """One earned Register row — the mirror-image of ``_locked_row``.
+
+    Emitted for every gate the reader has passed, whether or not a rendered
+    insight came out of it: passing the gate is the achievement; whether this
+    visit's data happened to trip a template is not. ``have`` is the reader's
+    count against the gate's own population, so the row can say "read across
+    23 books" without the number meaning something different from the lock.
+    """
+    return {
+        "category": cat,
+        "label": GATE_LABELS.get(cat, cat.replace("_", " ").title()),
+        "opens": GATE_OPENS.get(cat, ""),
+        "have": have,
+        "need": need,
+    }
 
 
 def _top_slug(vec: dict[str, float]) -> str | None:
@@ -632,7 +695,7 @@ def build_dna(
         "new_top": _top_slug(current),
     }
 
-    unlocked, locked = generate_insights(ctx, limit=insight_limit)
+    unlocked, locked, earned = generate_insights(ctx, limit=insight_limit)
     archetype_id, scores, gap = sig.score_archetype(current)
 
     return {
@@ -641,6 +704,9 @@ def build_dna(
         "tagged_count": len(tagged),
         "insights": unlocked,
         "locked": locked,
+        # The gates the reader has passed — the Register's positive column. See
+        # generate_insights: this is independent of whether a template rendered.
+        "earned": earned,
         # None is a legitimate answer here: the reader can be past the gate and
         # still have a tally that names nobody. The client must handle it.
         "archetype": sig.archetype_dict(archetype_id) if archetype_id else None,

@@ -194,7 +194,7 @@ def test_contradiction_requires_reads_for():
 # ── Locked list is honest and always includes seasonality ──
 
 def test_locked_list_names_what_unlocks_and_includes_seasonality():
-    _, locked = generate_insights({"book_count": 6, "tagged_count": 6, "arc_count": 0, "blind_spots": [], "range": {"distinct": 3, "entropy": 0.3},
+    _, locked, _ = generate_insights({"book_count": 6, "tagged_count": 6, "arc_count": 0, "blind_spots": [], "range": {"distinct": 3, "entropy": 0.3},
                                    "intensity_signature": {"share_high": 0.1, "variance": 3.0},
                                    "stated": None, "abandonment": None, "arc": None, "top_pair": None,
                                    "rare": [], "drift": 0.0, "has_two_snapshots": False,
@@ -204,6 +204,33 @@ def test_locked_list_names_what_unlocks_and_includes_seasonality():
     assert "pairing" in cats  # gate 15, not reached at 6 books
     for l in locked:
         assert l["reason"] and l["unlocks_at"]
+        assert l["label"] and "opens" in l
+
+
+def test_earned_column_is_the_mirror_image_of_locked():
+    """Every gate is either earned or locked — never both, never neither —
+    except seasonality, which is locked until 12 months regardless of count."""
+    from app.services.dna_insights import GATES
+    ctx = {"book_count": 12, "tagged_count": 12, "arc_count": 6, "dnf_stated_count": 0,
+           "blind_spots": [], "range": {"distinct": 3, "entropy": 0.3},
+           "intensity_signature": {"share_high": 0.1, "variance": 3.0},
+           "stated": None, "abandonment": None, "arc": None, "top_pair": None,
+           "rare": [], "drift": 0.0, "has_two_snapshots": False,
+           "old_top": None, "new_top": None, "range_prev_distinct": None}
+    _, locked, earned = generate_insights(ctx)
+    gated = {c for c in GATES if c not in ("frequency", "intensity")}
+    earned_cats = {r["category"] for r in earned}
+    locked_cats = {l["category"] for l in locked}
+    # intensity_signature/range/blind_spot/contradiction/abandonment gate at ≤12 → earned
+    assert {"intensity_signature", "range", "blind_spot", "abandonment"} <= earned_cats
+    # pairing/drift (15) and dnf_reason (3 stated, have 0) → locked
+    assert {"pairing", "drift", "dnf_reason"} <= locked_cats
+    assert "seasonality" not in earned_cats and "seasonality" in locked_cats
+    # partition: no gate is in both, none is missing (bar contradiction, which is
+    # emitted as a rendered insight here and so appears in neither list)
+    assert not (earned_cats & locked_cats)
+    for r in earned:
+        assert r["have"] >= r["need"] and r["label"]
 
 
 # ── The TBR pile is not a reading (B2.2 fast-add) ──

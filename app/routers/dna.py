@@ -95,8 +95,11 @@ async def get_dna_profile(
     #   - locked rows without `need`: cached before the "Not yet" copy started
     #     naming each gate's real population and the reader's count against it, so
     #     an old cache still says a bare "waits on 5 books".
+    #   - no `earned` key: cached before the Register's positive column existed.
     def _fresh(c: dict) -> bool:
         if "snapshot_count" not in c:
+            return False
+        if c.get("enough") and "earned" not in c:
             return False
         return all("need" in row for row in (c.get("locked") or []))
 
